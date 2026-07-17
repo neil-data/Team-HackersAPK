@@ -49,6 +49,7 @@ from agents.orchestrator.schema import (
 from agents.mitre_mapper.mitre_rules import map_to_mitre
 from agents.capability_classifier.capability_rules import classify_capabilities
 from agents.narrative_agent.narrative import generate_narrative
+from agents.orchestrator.risk_scoring import compute_risk_score as _compute_risk_score
 
 
 MOCK_DATA_DIR = Path(__file__).parent / "mock_data"
@@ -125,33 +126,13 @@ def capability_classifier(state: OrchestratorState) -> OrchestratorState:
 
 
 def compute_risk_score(state: OrchestratorState) -> OrchestratorState:
-    """
-    Weighted risk score using both static and dynamic signals.
-    Weighting is intentionally simple and documented — tune the
-    weights here if scores don't feel right during team demo prep,
-    no need to touch anything else in the graph.
-    """
-    static = state["static_output"]
-    dynamic = state.get("dynamic_output")
-    mitre = state.get("mitre_techniques", [])
-    capabilities = state.get("capability_tags", [])
-
-    score = 0
-    score += len(static.yara_matches) * 15
-    score += len(mitre) * 8
-    score += sum(int(c.confidence * 15) for c in capabilities)
-
-    if static.ml_classifier and static.ml_classifier.classification == "likely_malicious":
-        score += 20
-
-    if dynamic:
-        if any(conn.get("flagged_c2") for conn in dynamic.network_connections):
-            score += 20
-        if any("DevicePolicyManager" in c for c in dynamic.api_calls):
-            score += 10
-
-    score = max(0, min(score, 100))
-
+    """Delegates to risk_scoring.py — see that module for the weighting logic."""
+    score = _compute_risk_score(
+        static=state["static_output"],
+        dynamic=state.get("dynamic_output"),
+        mitre=state.get("mitre_techniques", []),
+        capabilities=state.get("capability_tags", []),
+    )
     print(f"[compute_risk_score] Risk score: {score}/100")
     return {**state, "risk_score": score}
 
