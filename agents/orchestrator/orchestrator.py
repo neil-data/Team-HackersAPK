@@ -1,30 +1,38 @@
 """
-orchestrator.py — LangGraph agent orchestrator skeleton (Week 2).
+orchestrator.py — LangGraph agent orchestrator (Week 2 — completed).
 
-Week 2 goal: get the graph structure running end-to-end against MOCK
-static-analysis data, so integration with Member 1's real output in
-Week 3 is a drop-in swap, not a rebuild.
-
-Graph flow (Week 2 — dynamic/MITRE/narrative nodes are stubs):
+Graph flow:
 
     load_static_analysis
             |
             v
-    mitre_mapper (STUB — real logic in Week 4)
+    load_dynamic_analysis   (mock for now — real Week 3 swap point)
             |
             v
-    capability_classifier (STUB — real logic in Week 4)
+    mitre_mapper             (real rule engine — mitre_rules.py)
             |
             v
-    compute_risk_score (basic version, real Week 4)
+    capability_classifier    (real rule engine — capability_rules.py)
             |
             v
-    narrative_agent (STUB — real logic in Week 4)
+    compute_risk_score       (weighted, uses static + dynamic signals)
+            |
+            v
+    narrative_agent          (real Groq call, graceful fallback — narrative.py)
             |
             v
           END
 
-Run this file directly to see the mock sample flow through the graph:
+SWAP POINTS FOR WEEK 3 (clearly marked below with "WEEK 3 SWAP"):
+  1. load_static_analysis  -> replace mock file read with Member 1's real service/DB call
+  2. load_dynamic_analysis -> replace mock file read with Member 2's real CAPE/sandbox output
+
+Everything downstream of those two loaders (mapping, classification,
+scoring, narrative) already runs on real logic and does NOT need to
+change when the swap happens — that was the whole point of building
+against a locked mock schema in Week 2.
+
+Run directly:
     python orchestrator.py
 """
 
@@ -33,12 +41,17 @@ from pathlib import Path
 
 from langgraph.graph import StateGraph, END
 
-from schema import (
+from agents.orchestrator.schema import (
     OrchestratorState,
     StaticAnalysisOutput,
-    MitreTechnique,
-    CapabilityTag,
+    DynamicAnalysisOutput,
 )
+from agents.mitre_mapper.mitre_rules import map_to_mitre
+from agents.capability_classifier.capability_rules import classify_capabilities
+from agents.narrative_agent.narrative import generate_narrative
+
+
+MOCK_DATA_DIR = Path(__file__).parent / "mock_data"
 
 
 # ---------------------------------------------------------------------
@@ -47,13 +60,12 @@ from schema import (
 
 def load_static_analysis(state: OrchestratorState) -> OrchestratorState:
     """
-    Week 2: loads mock static analysis JSON from disk.
-    Week 3+: this becomes a real fetch from Member 1's static-analysis
-    service/DB, keyed by sample_id. Swap the mock load for a real
-    call here — the rest of the graph doesn't need to change.
+    WEEK 3 SWAP: replace this mock file read with a real fetch from
+    Member 1's static-analysis service/DB, keyed by sample_id. Nothing
+    else in the graph needs to change as long as the returned shape
+    still validates against schema.StaticAnalysisOutput.
     """
-    mock_path = Path(__file__).parent / "mock_data" / "static_analysis_sample.json"
-    with open(mock_path) as f:
+    with open(MOCK_DATA_DIR / "static_analysis_sample.json") as f:
         raw = json.load(f)
     raw.pop("_comment", None)
 
@@ -69,109 +81,91 @@ def load_static_analysis(state: OrchestratorState) -> OrchestratorState:
     }
 
 
+def load_dynamic_analysis(state: OrchestratorState) -> OrchestratorState:
+    """
+    WEEK 3 SWAP: replace this mock file read with a real fetch from
+    Member 2's CAPE/sandbox output once the GCP detonation plane is
+    live. Until then, the graph runs fully against this mock so every
+    downstream node (MITRE mapping, capability classification, risk
+    score, narrative) can be built and tested now.
+    """
+    dynamic_path = MOCK_DATA_DIR / "dynamic_analysis_sample.json"
+
+    if not dynamic_path.exists():
+        print("[load_dynamic_analysis] No dynamic data available — continuing static-only")
+        return {**state, "dynamic_output": None}
+
+    with open(dynamic_path) as f:
+        raw = json.load(f)
+    raw.pop("_comment", None)
+
+    dynamic_output = DynamicAnalysisOutput.model_validate(raw)
+
+    print(f"[load_dynamic_analysis] Loaded dynamic data for {dynamic_output.sample_id} "
+          f"({len(dynamic_output.api_calls)} API calls, "
+          f"{len(dynamic_output.network_connections)} network connection(s))")
+
+    return {**state, "dynamic_output": dynamic_output}
+
+
 def mitre_mapper(state: OrchestratorState) -> OrchestratorState:
-    """
-    STUB for Week 2. Real logic (Week 4): map YARA rule hits + manifest
-    permissions + extracted strings to MITRE ATT&CK technique IDs using
-    a rules table or LLM-assisted mapping.
-
-    For now: a tiny hardcoded lookup so the graph runs end-to-end and
-    produces a plausible-looking output for demoing the pipeline shape.
-    """
-    static = state["static_output"]
-    techniques: list[MitreTechnique] = []
-
-    flags = static.static_risk_flags
-    if "requests_sms_and_overlay_together" in flags:
-        techniques.append(MitreTechnique(
-            technique_id="T1517",
-            technique_name="Access Notifications",
-            confidence=0.8,
-        ))
-    if "hardcoded_c2_ip" in flags:
-        techniques.append(MitreTechnique(
-            technique_id="T1071",
-            technique_name="Application Layer Protocol (C2)",
-            confidence=0.75,
-        ))
-
-    print(f"[mitre_mapper] Mapped {len(techniques)} technique(s) (STUB LOGIC)")
-
+    """Real rule-based MITRE ATT&CK mapping — see mitre_rules.py."""
+    techniques = map_to_mitre(state["static_output"], state.get("dynamic_output"))
+    print(f"[mitre_mapper] Mapped {len(techniques)} technique(s): "
+          f"{[t.technique_id for t in techniques]}")
     return {**state, "mitre_techniques": techniques}
 
 
 def capability_classifier(state: OrchestratorState) -> OrchestratorState:
-    """
-    STUB for Week 2. Real logic (Week 4): classify capability
-    (keylogging / OTP-theft / GPS tracking / screen-capture) from
-    combined static + dynamic signals.
-    """
-    static = state["static_output"]
-    tags: list[CapabilityTag] = []
-
-    perms = static.android_manifest.permissions if static.android_manifest else []
-    if "android.permission.READ_SMS" in perms:
-        tags.append(CapabilityTag(
-            capability="sms_otp_theft",
-            confidence=0.85,
-            evidence=["READ_SMS permission", "matches india_scam YARA rule"],
-        ))
-    if "android.permission.ACCESS_FINE_LOCATION" in perms:
-        tags.append(CapabilityTag(
-            capability="gps_tracking",
-            confidence=0.6,
-            evidence=["ACCESS_FINE_LOCATION permission"],
-        ))
-
-    print(f"[capability_classifier] Tagged {len(tags)} capability/ies (STUB LOGIC)")
-
+    """Real rule-based capability classification — see capability_rules.py."""
+    tags = classify_capabilities(state["static_output"], state.get("dynamic_output"))
+    print(f"[capability_classifier] Tagged {len(tags)} capability/ies: "
+          f"{[t.capability for t in tags]}")
     return {**state, "capability_tags": tags}
 
 
 def compute_risk_score(state: OrchestratorState) -> OrchestratorState:
     """
-    Basic weighted score for Week 2 — good enough to demo the Risk
-    Score dashboard feature. Refine weighting in Week 4 once dynamic
-    signals are available too.
+    Weighted risk score using both static and dynamic signals.
+    Weighting is intentionally simple and documented — tune the
+    weights here if scores don't feel right during team demo prep,
+    no need to touch anything else in the graph.
     """
-    score = 0
     static = state["static_output"]
+    dynamic = state.get("dynamic_output")
+    mitre = state.get("mitre_techniques", [])
+    capabilities = state.get("capability_tags", [])
 
+    score = 0
     score += len(static.yara_matches) * 15
-    score += len(state.get("mitre_techniques", [])) * 10
-    score += len(state.get("capability_tags", [])) * 10
+    score += len(mitre) * 8
+    score += sum(int(c.confidence * 15) for c in capabilities)
 
     if static.ml_classifier and static.ml_classifier.classification == "likely_malicious":
-        score += 25
+        score += 20
 
-    score = min(score, 100)
+    if dynamic:
+        if any(conn.get("flagged_c2") for conn in dynamic.network_connections):
+            score += 20
+        if any("DevicePolicyManager" in c for c in dynamic.api_calls):
+            score += 10
+
+    score = max(0, min(score, 100))
 
     print(f"[compute_risk_score] Risk score: {score}/100")
-
     return {**state, "risk_score": score}
 
 
 def narrative_agent(state: OrchestratorState) -> OrchestratorState:
-    """
-    STUB for Week 2. Real logic (Week 4): call Groq/Kimi via NVIDIA NIM
-    to generate the plain-language officer summary from all correlated
-    signals. For now, a template string so the graph output is
-    demoable end-to-end.
-    """
-    static = state["static_output"]
-    caps = [t.capability for t in state.get("capability_tags", [])]
-    cap_text = " and ".join(caps) if caps else "no confirmed malicious capability"
-
-    summary = (
-        f"[STUB NARRATIVE] This sample ({static.platform}, "
-        f"package: {static.android_manifest.package_name if static.android_manifest else 'n/a'}) "
-        f"shows signs of {cap_text}. "
-        f"Risk score: {state.get('risk_score', 'n/a')}/100. "
-        f"Real LLM-generated narrative arrives in Week 4."
+    """Real narrative generation via Groq, with graceful template fallback."""
+    summary = generate_narrative(
+        static=state["static_output"],
+        dynamic=state.get("dynamic_output"),
+        mitre=state.get("mitre_techniques", []),
+        capabilities=state.get("capability_tags", []),
+        risk_score=state.get("risk_score", 0),
     )
-
     print(f"[narrative_agent] {summary}")
-
     return {**state, "narrative_summary": summary}
 
 
@@ -183,13 +177,15 @@ def build_graph():
     graph = StateGraph(OrchestratorState)
 
     graph.add_node("load_static_analysis", load_static_analysis)
+    graph.add_node("load_dynamic_analysis", load_dynamic_analysis)
     graph.add_node("mitre_mapper", mitre_mapper)
     graph.add_node("capability_classifier", capability_classifier)
     graph.add_node("compute_risk_score", compute_risk_score)
     graph.add_node("narrative_agent", narrative_agent)
 
     graph.set_entry_point("load_static_analysis")
-    graph.add_edge("load_static_analysis", "mitre_mapper")
+    graph.add_edge("load_static_analysis", "load_dynamic_analysis")
+    graph.add_edge("load_dynamic_analysis", "mitre_mapper")
     graph.add_edge("mitre_mapper", "capability_classifier")
     graph.add_edge("capability_classifier", "compute_risk_score")
     graph.add_edge("compute_risk_score", "narrative_agent")
@@ -207,4 +203,4 @@ if __name__ == "__main__":
     print(f"Risk Score: {final_state['risk_score']}")
     print(f"MITRE Techniques: {[t.technique_id for t in final_state['mitre_techniques']]}")
     print(f"Capabilities: {[c.capability for c in final_state['capability_tags']]}")
-    print(f"Narrative: {final_state['narrative_summary']}")
+    print(f"Narrative:\n{final_state['narrative_summary']}")
