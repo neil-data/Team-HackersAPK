@@ -189,7 +189,8 @@ Weekly sync: every Thursday mentor meeting, each member demos their slice agains
 | 3    | Fri 17 – Thu 23 Jul | Dynamic sandbox live (Android + Windows), network capture, orchestrator wired to real data                                                               |
 | 4    | Fri 24 – Thu 30 Jul | MITRE/capability/narrative agents finalized, dashboard (incl. Process Tree, Risk Score, Evidence Timeline), PPT + demo video, final submission on Unstop |
 
-Full plan with daily/task-level detail: see `docs/` and the project plan PDF.
+Full plan with daily/task-level detail
+: see `docs/` and the project plan PDF.
 
 ---
 

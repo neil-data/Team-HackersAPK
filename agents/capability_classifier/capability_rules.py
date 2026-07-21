@@ -123,6 +123,76 @@ def _cap_persistence(static: StaticAnalysisOutput, dynamic: Optional[DynamicAnal
     return None
 
 
+def _cap_cron_persistence(static: StaticAnalysisOutput, dynamic: Optional[DynamicAnalysisOutput]) -> Optional[CapabilityTag]:
+    """Linux — persistence via cron."""
+    if dynamic and any("cron" in a.lower() for a in dynamic.persistence_artifacts):
+        return CapabilityTag(
+            capability="persistence_cron",
+            confidence=0.85,
+            evidence=["installs a cron job — survives reboot on Linux"],
+        )
+    return None
+
+
+def _cap_launchd_persistence(static: StaticAnalysisOutput, dynamic: Optional[DynamicAnalysisOutput]) -> Optional[CapabilityTag]:
+    """macOS — persistence via LaunchAgents/LaunchDaemons."""
+    if dynamic and any(
+        "launchd" in a.lower() or "launchagent" in a.lower() or "launchdaemon" in a.lower()
+        for a in dynamic.persistence_artifacts
+    ):
+        return CapabilityTag(
+            capability="persistence_launchd",
+            confidence=0.85,
+            evidence=["installs a LaunchAgent/LaunchDaemon — survives reboot on macOS"],
+        )
+    return None
+
+
+def _cap_privilege_escalation(static: StaticAnalysisOutput, dynamic: Optional[DynamicAnalysisOutput]) -> Optional[CapabilityTag]:
+    """Linux/macOS — setuid/setgid privilege escalation."""
+    binary_imports = static.binary_analysis.imports if static.binary_analysis else []
+    static_hit = any("setuid" in imp.lower() or "setgid" in imp.lower() for imp in binary_imports)
+    dynamic_hit = dynamic and any("setuid" in c.lower() or "setgid" in c.lower() for c in dynamic.api_calls)
+    if static_hit or dynamic_hit:
+        confidence = 0.8 if dynamic_hit else 0.5
+        evidence = []
+        if static_hit:
+            evidence.append("setuid/setgid import found in binary")
+        if dynamic_hit:
+            evidence.append("observed setuid/setgid call during detonation — privilege escalation")
+        return CapabilityTag(capability="privilege_escalation", confidence=confidence, evidence=evidence)
+    return None
+
+
+def _cap_reverse_shell(static: StaticAnalysisOutput, dynamic: Optional[DynamicAnalysisOutput]) -> Optional[CapabilityTag]:
+    """Cross-platform — remote shell access capability."""
+    shell_spawn = dynamic and any(
+        proc in str(dynamic.process_tree).lower() for proc in ("/bin/sh", "/bin/bash", "cmd.exe", "powershell")
+    )
+    has_network = dynamic and len(dynamic.network_connections) > 0
+    if shell_spawn and has_network:
+        return CapabilityTag(
+            capability="remote_shell_access",
+            confidence=0.8,
+            evidence=["spawned a command shell with an active network connection — remote control capability"],
+        )
+    return None
+
+
+def _cap_library_hijack(static: StaticAnalysisOutput, dynamic: Optional[DynamicAnalysisOutput]) -> Optional[CapabilityTag]:
+    """Linux — LD_PRELOAD hijacking for stealth/persistence."""
+    static_hit = any("LD_PRELOAD" in kw for kw in static.extracted_strings.suspicious_keywords)
+    dynamic_hit = dynamic and any("LD_PRELOAD" in c for c in dynamic.api_calls)
+    if static_hit or dynamic_hit:
+        confidence = 0.75 if dynamic_hit else 0.5
+        return CapabilityTag(
+            capability="library_hijacking",
+            confidence=confidence,
+            evidence=["uses LD_PRELOAD to hijack library loading — stealth/persistence technique"],
+        )
+    return None
+
+
 CAPABILITY_RULES = [
     _cap_sms_otp_theft,
     _cap_gps_tracking,
@@ -131,6 +201,11 @@ CAPABILITY_RULES = [
     _cap_data_exfiltration,
     _cap_keylogging,
     _cap_persistence,
+    _cap_cron_persistence,
+    _cap_launchd_persistence,
+    _cap_privilege_escalation,
+    _cap_reverse_shell,
+    _cap_library_hijack,
 ]
 
 

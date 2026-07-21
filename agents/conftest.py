@@ -13,6 +13,7 @@ from agents.orchestrator.schema import (
     DynamicAnalysisOutput,
     AndroidManifestInfo,
     PEAnalysisInfo,
+    BinaryAnalysisInfo,
     ExtractedStrings,
     MLClassifierResult,
     YaraMatch,
@@ -146,4 +147,80 @@ def sparse_static():
         extracted_strings=ExtractedStrings(),
         ml_classifier=None,
         static_risk_flags=[],
+    )
+
+
+@pytest.fixture
+def linux_elf_static():
+    return StaticAnalysisOutput(
+        sample_id="elf001", sha256="4" * 64, platform="linux", file_type="elf",
+        file_size_bytes=45000, submitted_at="2026-07-17T11:00:00Z",
+        yara_matches=[
+            YaraMatch(rule_name="linux_reverse_shell_pattern", category="generic",
+                       severity="high", description="ELF binary with shell spawn + network pattern"),
+        ],
+        android_manifest=None,
+        pe_analysis=None,
+        binary_analysis=BinaryAnalysisInfo(
+            format="ELF", imports=["execve", "socket", "setuid", "connect"],
+            sections=[".text", ".data", ".bss"], architecture="x86_64", is_signed=None,
+        ),
+        extracted_strings=ExtractedStrings(
+            urls=[], ips=["103.45.11.9"], suspicious_keywords=["LD_PRELOAD"],
+        ),
+        ml_classifier=MLClassifierResult(model="isolation_forest_v1", anomaly_score=0.88, classification="likely_malicious"),
+        static_risk_flags=["hardcoded_c2_ip"],
+    )
+
+
+@pytest.fixture
+def linux_elf_dynamic():
+    return DynamicAnalysisOutput(
+        sample_id="elf001",
+        process_tree=[{"pid": 1, "name": "sample_elf", "children": [2]},
+                       {"pid": 2, "name": "/bin/sh", "children": []}],
+        api_calls=["setuid(0)", "socket()", "connect()"],
+        network_connections=[
+            {"dest_ip": "103.45.11.9", "dest_port": 4444, "protocol": "tcp",
+             "bytes_sent": 2000, "interval_seconds": 20, "flagged_c2": True}
+        ],
+        files_written=["/tmp/.hidden_payload"],
+        registry_changes=[],
+        persistence_artifacts=["/etc/cron.d/system-update"],
+        c2_endpoints_detected=["103.45.11.9:4444"],
+    )
+
+
+@pytest.fixture
+def macos_machO_static():
+    return StaticAnalysisOutput(
+        sample_id="macho001", sha256="5" * 64, platform="macos", file_type="macho",
+        file_size_bytes=98000, submitted_at="2026-07-17T11:05:00Z",
+        yara_matches=[],
+        android_manifest=None,
+        pe_analysis=None,
+        binary_analysis=BinaryAnalysisInfo(
+            format="MachO", imports=["NSTask", "URLSession"],
+            sections=["__TEXT", "__DATA"], architecture="arm64", is_signed=False,
+        ),
+        extracted_strings=ExtractedStrings(urls=["http://mac-c2.example/beacon"], ips=[], suspicious_keywords=[]),
+        ml_classifier=MLClassifierResult(model="isolation_forest_v1", anomaly_score=0.7, classification="suspicious"),
+        static_risk_flags=[],
+    )
+
+
+@pytest.fixture
+def macos_machO_dynamic():
+    return DynamicAnalysisOutput(
+        sample_id="macho001",
+        process_tree=[{"pid": 1, "name": "sample_macho", "children": []}],
+        api_calls=["NSTask.launch"],
+        network_connections=[
+            {"dest_ip": "51.68.10.4", "dest_port": 443, "protocol": "https",
+             "bytes_sent": 3000, "interval_seconds": 60, "flagged_c2": True}
+        ],
+        files_written=[],
+        registry_changes=[],
+        persistence_artifacts=["~/Library/LaunchAgents/com.fakeupdate.plist"],
+        c2_endpoints_detected=["51.68.10.4:443"],
     )

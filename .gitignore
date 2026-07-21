@@ -26,3 +26,4 @@ dynamic-sandbox/samples/
 *.pem
 *.key
 .env.local
+.pytest_cache/

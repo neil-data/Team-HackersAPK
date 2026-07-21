@@ -30,9 +30,24 @@ class AndroidManifestInfo(BaseModel):
 
 
 class PEAnalysisInfo(BaseModel):
+    """Used for Windows PE format — both .exe and .dll share this shape."""
     imports: list[str] = Field(default_factory=list)
     sections: list[str] = Field(default_factory=list)
     compile_timestamp: Optional[str] = None
+
+
+class BinaryAnalysisInfo(BaseModel):
+    """
+    Generic binary analysis for non-PE formats: ELF (Linux) and
+    Mach-O (macOS). Windows EXE/DLL use PEAnalysisInfo instead —
+    this keeps the two format families cleanly separated rather than
+    forcing one bloated "works for everything" struct.
+    """
+    format: Literal["ELF", "MachO"]
+    imports: list[str] = Field(default_factory=list)
+    sections: list[str] = Field(default_factory=list)   # ELF sections / Mach-O segments
+    architecture: Optional[str] = None                    # e.g. "x86_64", "arm64"
+    is_signed: Optional[bool] = None                      # relevant for Mach-O code signing checks
 
 
 class ExtractedStrings(BaseModel):
@@ -51,14 +66,15 @@ class StaticAnalysisOutput(BaseModel):
     """Proposed contract for Member 1's static-analysis module output."""
     sample_id: str
     sha256: str
-    platform: Literal["android", "windows"]
-    file_type: str
+    platform: Literal["android", "windows", "linux", "macos"]
+    file_type: str          # e.g. "apk", "exe", "dll", "elf", "macho"
     file_size_bytes: int
     submitted_at: str
 
     yara_matches: list[YaraMatch] = Field(default_factory=list)
     android_manifest: Optional[AndroidManifestInfo] = None
-    pe_analysis: Optional[PEAnalysisInfo] = None
+    pe_analysis: Optional[PEAnalysisInfo] = None            # Windows: .exe and .dll
+    binary_analysis: Optional[BinaryAnalysisInfo] = None     # Linux ELF / macOS Mach-O
     extracted_strings: ExtractedStrings
     ml_classifier: Optional[MLClassifierResult] = None
     static_risk_flags: list[str] = Field(default_factory=list)
@@ -75,7 +91,8 @@ class DynamicAnalysisOutput(BaseModel):
     api_calls: list[str] = Field(default_factory=list)
     network_connections: list[dict] = Field(default_factory=list)
     files_written: list[str] = Field(default_factory=list)
-    registry_changes: list[str] = Field(default_factory=list)
+    registry_changes: list[str] = Field(default_factory=list)          # Windows-specific
+    persistence_artifacts: list[str] = Field(default_factory=list)      # cross-platform: cron entries, launchd plists, systemd units, etc.
     c2_endpoints_detected: list[str] = Field(default_factory=list)
 
 

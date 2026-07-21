@@ -65,7 +65,19 @@ def load_static_analysis(state: OrchestratorState) -> OrchestratorState:
     Member 1's static-analysis service/DB, keyed by sample_id. Nothing
     else in the graph needs to change as long as the returned shape
     still validates against schema.StaticAnalysisOutput.
+
+    If static_output is already present in the incoming state (e.g.
+    injected by the backend API from a real request), skip the mock
+    file read entirely and use that instead — this is what lets
+    backend/app/routers/cases.py drive the graph with real submitted
+    data instead of only the hardcoded demo sample.
     """
+    if state.get("static_output") is not None:
+        static_output = state["static_output"]
+        print(f"[load_static_analysis] Using injected static data for {static_output.sample_id} "
+              f"({static_output.platform})")
+        return {**state, "sample_id": static_output.sample_id}
+
     with open(MOCK_DATA_DIR / "static_analysis_sample.json") as f:
         raw = json.load(f)
     raw.pop("_comment", None)
@@ -89,7 +101,20 @@ def load_dynamic_analysis(state: OrchestratorState) -> OrchestratorState:
     live. Until then, the graph runs fully against this mock so every
     downstream node (MITRE mapping, capability classification, risk
     score, narrative) can be built and tested now.
+
+    Same injection pattern as load_static_analysis above — if
+    dynamic_output key already exists in state (even if None, meaning
+    "explicitly no dynamic data yet"), that's respected instead of
+    falling back to the mock file.
     """
+    if "dynamic_output" in state:
+        dynamic_output = state["dynamic_output"]
+        if dynamic_output is not None:
+            print(f"[load_dynamic_analysis] Using injected dynamic data for {dynamic_output.sample_id}")
+        else:
+            print("[load_dynamic_analysis] Explicitly no dynamic data provided — continuing static-only")
+        return state
+
     dynamic_path = MOCK_DATA_DIR / "dynamic_analysis_sample.json"
 
     if not dynamic_path.exists():
